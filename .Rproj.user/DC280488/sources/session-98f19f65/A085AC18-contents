@@ -1,0 +1,132 @@
+#remove.packages("Tag2STM") ;
+#devtools::install_github("sdelestang/Tag2STM")
+library(Tag2STM)
+library(LobFunc)
+
+getwd()
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+obs <- read.csv("M:\\Fisheries Research\\Invertebrates Fisheries\\Rock Lobster\\IBSS\\Analysis\\TagRecaps_forGrowth.csv")
+
+## Chain multiple recaptures
+obs <- obs %>% arrange(tag, date) %>% group_by(tag) %>%
+  mutate(
+    date = as.Date(date), RLdate = as.Date(RLdate),
+    RLclength = lag(clength, default = first(RLclength)),
+    RLdate    = lag(date, default = first(RLdate)),
+    RLtstep   = lag(tstep, default = first(RLtstep)),
+    RLlatd    = lag(rclatd, default = first(RLlatd)),
+    RLlond    = lag(rclond, default = first(RLlond)),
+    RLarea    = lag(area, default = first(RLarea)),
+    RLsex     = lag(sex, default = first(RLsex)),
+    RLyear    = lag(year, default = first(RLyear)),
+    Ldays     = as.numeric(date - RLdate)
+  ) %>% ungroup() %>% filter(Ldays >= 1)
+
+## WRL natural mortality for plotting to ~ maximum age (years = 3.5/M)
+M <- 0.14
+
+## Set up length bins
+bins  <- MakeLbin(31, 191, 2)
+
+## Remove missing data, negative liberties
+obs %<>% mutate(Lmnth=floor(Ldays/30)) %>% filter(Ldays>0 & floor(clength)%in%40:200 & floor(RLclength)%in%40:200 & !is.na(clength)) %>%  mutate(growth=clength-RLclength)  %>% mutate(year=as.year(RLdate), sex=toupper(sex)) %>% filter(sex%in%c('F','M')) %>%  filter(growth>= -1)
+
+## Remove duplicated data with a small difference in recapture date
+obs %<>% mutate(id=paste(tag,RLdate,rclatd,rclond,clength,RLclength)) %>% filter(!duplicated(id)) %>% select(-id) %>% as.data.frame()
+
+## Identify closures or not and remove closures
+obs$closed[!is.na(obs$RLlond)] <- is_closed(obs$RLlond[!is.na(obs$RLlond)], -obs$RLlatd[!is.na(obs$RLlond)], obs$RLyear[!is.na(obs$RLlond)])
+obs %<>% filter(!obs$closed)
+
+### Set up time-steps
+## Make data frame with date splits
+timesteps <- data.frame(month=c(7,11,12,1,3,5), halfmonth=c(0,1,1,1,0,0)) ## This is complex IMuLT WRL
+#timesteps <- data.frame(month=c(1), halfmonth=c(0))
+#timesteps <- data.frame(month=c(1,4,7,10), halfmonth=c(0,0,0,0))
+ntsteps <- nrow(timesteps)
+times <- MakeTsteps(timesteps) %>% as.data.frame()
+
+## make objects needed for model
+obs %<>% mutate(relmn=as.month(RLdate),relhm=ifelse(as.day(RLdate)>14,1,0), recmn=as.month(date),rechm=ifelse(as.day(date)>14,1,0), relts=times$tstep[match(paste(relmn,relhm),paste(times$month,times$hm))], rects=times$tstep[match(paste(recmn,rechm),paste(times$month,times$hm))], yrslib = as.year(date)-as.year(RLdate), relyr=as.year(RLdate), recyr=as.year(date), rccl=clength, rlcl=RLclength,Lsex=sex)
+
+## now determine the number of tsteps at liberty based on timesteps defined above
+obs$ntstep <- apply(as.matrix(obs[,c('relyr','recyr','relmn','relhm','recmn','rechm')]), 1, cntTsteps)
+
+## Sort into growth areas
+obs %<>% mutate(garea=case_when(area%in%1:2&area==RLarea ~ 1, area%in%3:4&area==RLarea ~ 2, area%in%5&area==RLarea ~ 3,area%in%c(6,7,8)&area==RLarea ~ 4))
+
+## Sort into time periods - before and after 2010
+perfunc <- function(y1,y2,cut) {
+  nyr1 <- ifelse(y1<=cut, length(y1:cut), 0)
+  nyr2 <- ifelse(y2>=cut, length(cut:y2), 0)
+  ret <- ifelse(nyr1>=nyr2,1,2)
+  return(ret)  }
+obs %<>% rowwise() %>% mutate(period=perfunc(y1=as.year(RLdate), y2=as.year(date), cut=2010))
+
+# Run all combinations of base model to determine the best combination as determined through an iterative basis and using AIC
+vec <- 1:ntsteps
+totest <- unlist(lapply(1:length(vec), function(i) {combn(vec, i, FUN = function(x) paste(x, collapse = ","), simplify = TRUE)}))  # all possible combinations
+
+s <- 'F'
+a <- 1
+p <- 2
+for(s in c('M')) {
+  for(a in 1:4) {
+    for(p in 1:2)
+      {
+      out <- data.frame(id=totest, p=NA, nLL=NA, AIC=NA, BIC=NA, converge=NA) # record various runs
+      out <- out[apply(as.matrix(out[,1]), 1, nchar)<=4,]; ## Limit it to 3 timesteps
+        ## Select sex/area/period
+      tdat <- obs %>% filter(Lsex==s & garea==a & period==p) %>% group_by(tag, Lsex,rccl,rlcl,relts,ntstep) %>% summarise(num=length(Lsex),.groups = "drop_last")
+      for (i in 1:nrow(out))
+        {
+        goodts <- as.numeric(strsplit(out$id[i],',')[[1]])
+        print(paste(s,a,p," goodts", paste(goodts, collapse=" - ")))
+        ## Make pin file
+        pin <- Makepin()
+        ## Make Data input
+        datain <- list(tagNum=tdat$tag, Rccl=tdat$rccl, Rlcl=tdat$rlcl, relts=tdat$relts, tsteps=as.integer(tdat$ntstep), nlob=tdat$num, nlbin=length(bins$lbin), ntsteps=ntsteps, lbinL=bins$lbinL, lbinU=bins$lbinU, lbin=bins$lbin, goodts=goodts, M=M, smoother = 10)
+        ## Base Model no RE common sigma for measurement error
+        map <- Makemap(pin);
+        mod <- make_growmod_obj(pin = pin, map = map)
+        mout <- nlminb(mod$par, mod$fn, mod$gr, control = list(eval.max=2000, iter.max=2000))
+        mout
+        dout <- plotfit()[[1]]
+        logLike <- sum(dout$LL)
+        out$p[i] <- p
+        out$AIC[i] <- 2*length(mout$par)-(2*logLike)
+        out$BIC[i] <- length(mout$par) * log(nrow(tdat)) + -2 * logLike
+        out$nLL[i] <- -logLike
+        out$converge[i] <- mout$convergence
+      }
+      (out %<>%  arrange(AIC))
+      fname <- paste(s,a,p,'.csv')
+      write.csv(out, fname, row.names=F)
+      }
+    }
+  }
+
+goodts <- as.numeric(strsplit(out$id,',')[[1]])
+
+s <- 'M'
+a <- 4
+p <- 2
+goodts <- c(1,3)
+tdat <- obs %>% filter(Lsex==s & garea==a & period==p) %>% group_by(tag, Lsex,rccl,rlcl,relts,ntstep) %>% summarise(num=length(Lsex),.groups = "drop_last")
+
+## With RE
+datain <- list(tagNum=tdat$tag, Rccl=tdat$rccl, Rlcl=tdat$rlcl, relts=tdat$relts, tsteps=as.integer(tdat$ntstep), nlob=tdat$num, nlbin=length(bins$lbin), ntsteps=ntsteps, lbinL=bins$lbinL, lbinU=bins$lbinU, lbin=bins$lbin, goodts=goodts, M=M, smoother = 10)
+
+pin <- Makepin()
+map <- Makemap(pin,re=T)
+mod <- make_growmod_obj(pin = pin, map = map,random=c("MerrorRel","MerrorRec"))
+mout <- nlminb(mod$par, mod$fn, mod$gr, control = list(eval.max=2000, iter.max=2000))
+mout
+dout <- plotfit()[[1]]
+(neglogLike <- -sum(dout$LL))
+
+# Save the STMs
+# Return trimmed no-shrinkage matrix
+# Add IMuLT length bins
+ClipSTM(51, 131, 2)
+#devtools::load_all()

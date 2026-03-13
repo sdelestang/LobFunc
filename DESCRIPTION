@@ -1,0 +1,26 @@
+Package: LobFunc
+Type: Package
+Title: Functions to make stuff easier
+Version: 0.1.1
+Authors@R: c(
+    person(
+      "Simon", "de lestang",
+      email = "simon.delestang@dpird.wa.gov.au",
+      role = c("aut", "cre")
+    )
+  )
+Description: This package contains a bunch of functions commonly used within the Lobster/Crab branch.
+    It also auto-loads commonly used packages dplyr, magrittr, ggplots.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.2
+Imports: 
+    gamm4,
+    stats,
+    sf
+Depends: 
+    R (>= 3.5),
+    dplyr,
+    magrittr,
+    ggplot2
