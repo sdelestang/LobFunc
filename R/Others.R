@@ -19,8 +19,9 @@ numchar <-  function(x) as.numeric(as.character(x))
 #' dat <- data.frame(year=2000:2021, temperature=23)
 #' toXL(dat)
 #' @export
-toXL <- function(x, rnames=FALSE){
-  utils::write.table(x, "clipboard", sep="\t", row.names = rnames)
+toXL <- function(x, rnames=FALSE, isbig=FALSE){
+  if(!isbig) utils::write.table(x, "clipboard", sep="\t", row.names = rnames)
+  if(isbig) utils::write.table(x, "clipboard-1024", sep="\t", row.names = rnames)
 }
 
 #' Opens a text file and converts to data.frames
