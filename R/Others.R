@@ -12,16 +12,28 @@ numchar <-  function(x) as.numeric(as.character(x))
 #' Copy to Clipboard
 #'
 #' Tkes a dataframe and copies to to the clipboard so you can paste it into Excel
-#' @param x name of data.frame
-#' @param rnames logical - should row names be printed
+#' @param x Data frame or matrix to copy.
+#' @param rnames Logical. Include row names? Default \code{FALSE}.
+#' @param big Logical. Use a larger clipboard buffer (Windows only,
+#'   increases from default ~32KB to ~4MB)? Default \code{FALSE}.
 #' @return Clipboard gets loaded up
 #' @examples
 #' dat <- data.frame(year=2000:2021, temperature=23)
 #' toXL(dat)
 #' @export
-toXL <- function(x, rnames=FALSE, isbig=FALSE){
-  if(!isbig) utils::write.table(x, "clipboard", sep="\t", row.names = rnames)
-  if(isbig) utils::write.table(x, "clipboard-1024", sep="\t", row.names = rnames)
+toXL <- function(x, rnames = FALSE, big = FALSE) {
+  if (.Platform$OS.type == "windows") {
+    cb <- if (big) "clipboard-4194304" else "clipboard"
+    utils::write.table(x, cb, sep = "\t", row.names = rnames)
+  } else if (Sys.info()["sysname"] == "Darwin") {
+    con <- pipe("pbcopy")
+    utils::write.table(x, con, sep = "\t", row.names = rnames)
+    close(con)
+  } else {
+    con <- pipe("xclip -selection clipboard")
+    utils::write.table(x, con, sep = "\t", row.names = rnames)
+    close(con)
+  }
 }
 
 #' Opens a text file and converts to data.frames
